@@ -1,74 +1,69 @@
-import os  
+import os
 import discord
 from discord.ext import commands
+from pymongo import MongoClient
 
-# --- CONFIG ---
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # replace with your bot token
-CHANNEL_NAME = "86"      # channel where the bot will post
+TOKEN = os.environ["DISCORD_TOKEN"]
+MONGO_URI = os.environ["MONGO_URI"]
 
-# --- BOT SETUP ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Dictionary to track stock items
-stock = {}
+# Connect to MongoDB
+client = MongoClient(MONGO_URI)
+db = client["restaurant_bot"]           # database name
+stock_collection = db["stock_items"]    # collection name
 
-# Helper: format the status board
+# Helper to format board
 def format_board():
-    if not stock:
+    items = list(stock_collection.find({}))
+    if not items:
         return "✅ Everything is in stock!"
     msg = "📦 **Current Stock Status**\n"
-    for item, status in stock.items():
+    for item in items:
+        status = item["status"]
+        name = item["name"]
         if status == "out":
-            msg += f"❌ {item} — 86’d\n"
+            msg += f"❌ {name} — 86’d\n"
         elif status == "low":
-            msg += f"⚠️ {item} — Running Low\n"
+            msg += f"⚠️ {name} — Running Low\n"
         else:
-            msg += f"✅ {item} — In Stock\n"
+            msg += f"✅ {name} — In Stock\n"
     return msg
 
+# Update board in Discord
 async def update_board():
-    # Find the channel
     for guild in bot.guilds:
-        channel = discord.utils.get(guild.text_channels, name=CHANNEL_NAME)
+        channel = discord.utils.get(guild.text_channels, name="86")
         if channel:
-            # Clear old messages from bot
             async for message in channel.history(limit=50):
                 if message.author == bot.user:
                     await message.delete()
-            # Post updated board
             await channel.send(format_board())
 
-# --- COMMANDS ---
+# Commands
 @bot.command()
 async def add(ctx, *, item):
-    """Mark item as 86’d"""
-    stock[item] = "out"
+    stock_collection.update_one({"name": item}, {"$set": {"status": "out"}}, upsert=True)
     await update_board()
     await ctx.send(f"❌ {item} marked as 86’d.", delete_after=5)
 
 @bot.command()
 async def low(ctx, *, item):
-    """Mark item as running low"""
-    stock[item] = "low"
+    stock_collection.update_one({"name": item}, {"$set": {"status": "low"}}, upsert=True)
     await update_board()
     await ctx.send(f"⚠️ {item} marked as running low.", delete_after=5)
 
 @bot.command()
 async def remove(ctx, *, item):
-    """Mark item back in stock"""
-    if item in stock:
-        del stock[item]
+    stock_collection.delete_one({"name": item})
     await update_board()
     await ctx.send(f"✅ {item} is back in stock.", delete_after=5)
 
-# Start bot
 @bot.event
 async def on_ready():
     print(f"Bot connected as {bot.user}")
     await update_board()
 
-TOKEN = os.environ["DISCORD_TOKEN"]
 bot.run(TOKEN)
-
